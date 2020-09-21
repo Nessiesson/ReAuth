@@ -1,5 +1,0 @@
-{
-	"name": "reauth",
-	"mcversion": "1.12",
-	"mixinConfigs": "mixins.reauth.json"
-}

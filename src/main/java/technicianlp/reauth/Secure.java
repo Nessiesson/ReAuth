@@ -1,11 +1,5 @@
 package technicianlp.reauth;
 
-import java.io.File;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.UUID;
-
 import com.google.common.base.Charsets;
 import com.mojang.authlib.Agent;
 import com.mojang.authlib.GameProfile;
@@ -15,153 +9,157 @@ import com.mojang.authlib.yggdrasil.YggdrasilAuthenticationService;
 import com.mojang.authlib.yggdrasil.YggdrasilMinecraftSessionService;
 import com.mojang.authlib.yggdrasil.YggdrasilUserAuthentication;
 import com.mojang.util.UUIDTypeAdapter;
-
 import net.minecraft.client.Minecraft;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.management.PlayerProfileCache;
 import net.minecraft.tileentity.TileEntitySkull;
 import net.minecraft.util.Session;
+import net.minecraftforge.fml.common.ObfuscationReflectionHelper;
 
-final class Secure {
+import java.io.File;
+import java.lang.reflect.Field;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.UUID;
 
-    /**
-     * Username/email -> password map
-     */
-    static Map<String, Account> accounts = new LinkedHashMap<>();
-    static String offlineUsername = "";
+public final class Secure {
+	/**
+	 * Username/email -> password map
+	 */
+	protected static final Map<String, Account> accounts = new LinkedHashMap<>();
+	/**
+	 * Mojang authentificationservice
+	 */
+	private static final YggdrasilAuthenticationService yas = new YggdrasilAuthenticationService(Minecraft.getMinecraft().getProxy(), UUID.randomUUID().toString());
+	private static final YggdrasilUserAuthentication yua = (YggdrasilUserAuthentication) yas.createUserAuthentication(Agent.MINECRAFT);
+	private static final YggdrasilMinecraftSessionService ymss = (YggdrasilMinecraftSessionService) yas.createMinecraftSessionService();
+	private static String offlineUsername = "";
 
-    /**
-     * Mojang authentificationservice
-     */
-    private static final YggdrasilAuthenticationService yas;
-    private static final YggdrasilUserAuthentication yua;
-    private static final YggdrasilMinecraftSessionService ymss;
+	public static void initSkinStuff() {
+		final GameProfileRepository gpr = yas.createProfileRepository();
+		final PlayerProfileCache ppc = new PlayerProfileCache(gpr, new File(Minecraft.getMinecraft().gameDir, MinecraftServer.USER_CACHE_FILE.getName()));
+		TileEntitySkull.setProfileCache(ppc);
+		TileEntitySkull.setSessionService(ymss);
+	}
 
-    static {
-        /* initialize the authservices */
-        yas = new YggdrasilAuthenticationService(Minecraft.getMinecraft().getProxy(), UUID.randomUUID().toString());
-        yua = (YggdrasilUserAuthentication) yas.createUserAuthentication(Agent.MINECRAFT);
-        ymss = (YggdrasilMinecraftSessionService) yas.createMinecraftSessionService();
-    }
+	/**
+	 * Logs you in; replaces the Session in your client; and saves to config
+	 */
+	static void login(final String user, char[] pw, final boolean savePassToConfig) throws AuthenticationException, IllegalAccessException {
+		/* set credentials */
+		Secure.yua.setUsername(user);
+		Secure.yua.setPassword(new String(pw));
 
-    public static void initSkinStuff() {
-        GameProfileRepository gpr = yas.createProfileRepository();
-        PlayerProfileCache ppc = new PlayerProfileCache(gpr, new File(Minecraft.getMinecraft().mcDataDir, MinecraftServer.USER_CACHE_FILE.getName()));
-        TileEntitySkull.setProfileCache(ppc);
-        TileEntitySkull.setSessionService(ymss);
-    }
+		/* login */
+		Secure.yua.logIn();
 
-    /**
-     * Logs you in; replaces the Session in your client; and saves to config
-     */
-    static void login(String user, char[] pw, boolean savePassToConfig) throws AuthenticationException {
-        /* set credentials */
-        Secure.yua.setUsername(user);
-        Secure.yua.setPassword(new String(pw));
+		Main.log.info("Login successful!");
 
-        /* login */
-        Secure.yua.logIn();
+		/* put together the new Session with the auth-data */
+		final String username = Secure.yua.getSelectedProfile().getName();
+		final UUID uuid = Secure.yua.getSelectedProfile().getId();
+		final String uuidStr = UUIDTypeAdapter.fromUUID(uuid);
+		final String access = Secure.yua.getAuthenticatedToken();
+		final String type = Secure.yua.getUserType().getName();
+		SessionUtil.set(new Session(username, uuidStr, access, type));
 
-        LiteModReAuth.log.info("Login successful!");
+		/* logout to discard the credentials in the object */
+		Secure.yua.logOut();
 
-        /* put together the new Session with the auth-data */
-        String username = Secure.yua.getSelectedProfile().getName();
-        UUID uuid = Secure.yua.getSelectedProfile().getId();
-        String uuidStr = UUIDTypeAdapter.fromUUID(uuid);
-        String access = Secure.yua.getAuthenticatedToken();
-        String type = Secure.yua.getUserType().getName();
-        Sessionutil.set(new Session(username, uuidStr, access, type));
+		/* save username and password to config */
+		Secure.accounts.put(user, new Account(user, savePassToConfig ? pw : null, uuid, username));
 
-        /* logout to discard the credentials in the object */
-        Secure.yua.logOut();
+		Main.config.save();
+	}
 
-        /* save username and password to config */
-        Secure.accounts.put(user, new Account(user, savePassToConfig ? pw : null, uuid, username));
+	static void offlineMode(final String username) throws IllegalAccessException {
+		/* Create offline uuid */
+		final UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(Charsets.UTF_8));
+		SessionUtil.set(new Session(username, uuid.toString(), "invalid", "legacy"));
+		Main.log.info("Offline Username set!");
+		Secure.offlineUsername = username;
+	}
 
-        LiteModReAuth.saveConfig();
-    }
+	/**
+	 * checks online if the session is valid
+	 */
+	static boolean SessionValid() {
+		try {
+			final GameProfile gp = SessionUtil.get().getProfile();
+			final String token = SessionUtil.get().getToken();
+			final String id = UUID.randomUUID().toString();
 
-    static void offlineMode(String username) {
-        /* Create offline uuid */
-        UUID uuid = UUID.nameUUIDFromBytes(("OfflinePlayer:" + username).getBytes(Charsets.UTF_8));
-        Sessionutil.set(new Session(username, uuid.toString(), "invalid", "legacy"));
-        LiteModReAuth.log.info("Offline Username set!");
-        Secure.offlineUsername = username;
-    }
+			Secure.ymss.joinServer(gp, token, id);
+			if (Secure.ymss.hasJoinedServer(gp, id, null).isComplete()) {
+				Main.log.info("Session validation successful");
+				return true;
+			}
+		} catch (Exception e) {
+			Main.log.info("Session validation failed: " + e.getMessage());
+			return false;
+		}
 
-    /**
-     * checks online if the session is valid
-     */
-    static boolean SessionValid() {
-        try {
-            GameProfile gp = Sessionutil.get().getProfile();
-            String token = Sessionutil.get().getToken();
-            String id = UUID.randomUUID().toString();
+		Main.log.info("Session validation failed!");
+		return false;
+	}
 
-            Secure.ymss.joinServer(gp, token, id);
-            if (Secure.ymss.hasJoinedServer(gp, id, null).isComplete()) {
-                LiteModReAuth.log.info("Session validation successful");
-                return true;
-            }
-        } catch (Exception e) {
-            LiteModReAuth.log.info("Session validation failed: " + e.getMessage());
-            return false;
-        }
-        LiteModReAuth.log.info("Session validation failed!");
-        return false;
-    }
+	private static final class SessionUtil {
+		/**
+		 * as the Session field in Minecraft.class is final we have to access it
+		 * via reflection
+		 */
+		private static final Field sessionField = ObfuscationReflectionHelper.findField(Minecraft.class, "field_71449_j");
 
-    static final class Sessionutil {
-        static Session get() {
-            return Minecraft.getMinecraft().getSession();
-        }
+		private static Session get() {
+			return Minecraft.getMinecraft().getSession();
+		}
 
-        static void set(Session s) {
-            ((ISessionHolder) Minecraft.getMinecraft()).setSession(s);
-            GuiHandler.invalidateStatus();
-        }
-    }
+		static void set(final Session s) throws IllegalArgumentException, IllegalAccessException {
+			SessionUtil.sessionField.set(Minecraft.getMinecraft(), s);
+			GuiHandler.invalidateStatus();
+		}
+	}
 
-    static class Account {
-        private String username;
-        private char[] password;
-        private UUID uuid;
-        private String displayName;
-        private long lastQuery = 0;
+	protected static class Account {
+		private final String username;
+		private final char[] password;
+		private final String displayName;
+		private long lastQuery = 0;
+		private UUID uuid;
 
-        Account(String username, char[] password, UUID uuid, String displayName) {
-            this.username = username;
-            this.password = password;
-            this.uuid = uuid;
-            this.displayName = displayName;
-        }
+		Account(final String username, final char[] password, final UUID uuid, final String displayName) {
+			this.username = username;
+			this.password = password;
+			this.uuid = uuid;
+			this.displayName = displayName;
+		}
 
-        String getUsername() {
-            return username;
-        }
+		String getUsername() {
+			return username;
+		}
 
-        char[] getPassword() {
-            return password;
-        }
+		char[] getPassword() {
+			return password;
+		}
 
-        UUID getUuid() {
-            return uuid;
-        }
+		UUID getUuid() {
+			return uuid;
+		}
 
-        String getDisplayName() {
-            return displayName;
-        }
+		public void setUuid(final UUID uuid) {
+			this.uuid = uuid;
+		}
 
-        public void setUuid(UUID uuid) {
-            this.uuid = uuid;
-        }
+		String getDisplayName() {
+			return displayName;
+		}
 
-        public void setLastQuery(long lastQuery) {
-            this.lastQuery = lastQuery;
-        }
+		public long getLastQuery() {
+			return lastQuery;
+		}
 
-        public long getLastQuery() {
-            return lastQuery;
-        }
-    }
+		public void setLastQuery(final long lastQuery) {
+			this.lastQuery = lastQuery;
+		}
+	}
 }

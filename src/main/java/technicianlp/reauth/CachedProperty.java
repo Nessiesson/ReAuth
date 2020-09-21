@@ -1,35 +1,36 @@
 package technicianlp.reauth;
 
 final class CachedProperty<T> {
-    private T value;
-    private final T invalid;
-    private boolean valid;
+	private final T invalid;
+	private final long validity;
+	private T value;
+	private boolean valid;
+	private long timestamp;
 
-    private long timestamp;
-    private final long validity;
+	protected CachedProperty(final long validity, final T invalid) {
+		this.validity = validity;
+		this.invalid = invalid;
+	}
 
-    CachedProperty(long validity, T invalid) {
-        this.validity = validity;
-        this.invalid = invalid;
-    }
+	protected final T get() {
+		return valid ? value : invalid;
+	}
 
-    T get() {
-        return valid ? value : invalid;
-    }
+	protected final boolean check() {
+		if (System.currentTimeMillis() - timestamp > validity) {
+			invalidate();
+		}
 
-    boolean check() {
-        if (System.currentTimeMillis() - timestamp > validity)
-            invalidate();
-        return valid;
-    }
+		return valid;
+	}
 
-    void invalidate() {
-        valid = false;
-    }
+	protected final void invalidate() {
+		valid = false;
+	}
 
-    void set(T value) {
-        this.value = value;
-        this.timestamp = System.currentTimeMillis();
-        this.valid = true;
-    }
+	protected final void set(final T value) {
+		this.value = value;
+		this.timestamp = System.currentTimeMillis();
+		this.valid = true;
+	}
 }
